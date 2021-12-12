@@ -1,0 +1,45 @@
+[package]
+name = "taskqueue"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow = "1"
+async-trait = "0.1"
+chrono = "0.4"
+dotenv = "0.15.0"
+http = "0.2"
+humantime = "2"
+hyper = { version = "0.14", features = ["client"] }
+prost = "0.9"
+reqwest = { version = "0.11", features = ["json"] }
+serde = "1.0"
+serde_derive = "1.0"
+serde_json = { version = "1.0", features = ["arbitrary_precision"] }
+thiserror = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tokio-diesel = { git = "https://github.com/mehcode/tokio-diesel.git", rev = "f4af42558246ab323600622ba8d08803d3c18842" }
+tokio-retry = "0.3"
+tonic = { version = "0.6", features = [] }
+tracing = "0.1"
+tracing-futures = { version = "0.2.5", default-features = false }
+tracing-subscriber = "0.2"
+url = { version = "2.1", features = ["serde"] }
+uuid = { version = "0.8", features = ["v4", "serde"] }
+
+[build-dependencies]
+versionisator = "1.0.2"
+tonic-build = "0.6"
+
+
+[dev-dependencies]
+rand = "0.8.0"
+futures = "0.3"
+httpmock = "0.6"
+
+[features]
+# end to end tests
+e2e = []
+test_db = []
