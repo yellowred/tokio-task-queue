@@ -12,16 +12,19 @@ use proto::{task_queue_server::TaskQueue, FilterParams, Task, TaskList, TaskQueu
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 use tonic::{Request, Response, Status};
 use tracing::{error, info, span, Level};
 
 pub struct Server<D> {
-    datastore: Arc<Mutex<D>>,
+    datastore: Arc<RwLock<D>>,
 }
 
-impl<D> Server<D> {
-    pub fn new(datastore: Arc<Mutex<D>>) -> Server<D> {
+impl<D> Server<D>
+where
+    D: std::marker::Sync,
+{
+    pub fn new(datastore: Arc<RwLock<D>>) -> Server<D> {
         return Server {
             datastore: datastore,
         };
@@ -53,18 +56,12 @@ impl<D> Server<D> {
 #[tonic::async_trait]
 impl<D> TaskQueue for Server<D>
 where
-    D: TaskDataStore + Send + 'static,
+    D: TaskDataStore + Send + 'static + std::marker::Sync,
 {
     async fn publish(&self, request: Request<Task>) -> Result<Response<TaskQueueResult>, Status> {
         let correlation_id = CorrelationId::from_tonic_metadata(request.metadata())?;
-        let span = span!(
-            Level::INFO,
-            "publish",
-            correlation_id = %correlation_id,
-        );
-        let _guard = span.enter();
 
-        let mut ds = self.datastore.lock().await;
+        let mut ds = self.datastore.write().await;
         let task: Task = request.into_inner();
         match ds.add(task.name, correlation_id, task.parameters).await {
             Ok(uuid) => {
@@ -80,20 +77,12 @@ where
     }
 
     async fn list(&self, request: Request<FilterParams>) -> Result<Response<TaskList>, Status> {
-        let correlation_id = CorrelationId::from_tonic_metadata(request.metadata())?;
-        let span = span!(
-            Level::INFO,
-            "list",
-            correlation_id = %correlation_id,
-        );
-        let _guard = span.enter();
-
         let mut api_tasks: Vec<Task> = Vec::new();
 
         let mut filter = Filter::default();
         let filter_requested: FilterParams = request.into_inner();
         filter.state = Some(filter_requested.status());
-        let tasks = self.datastore.lock().await.items(&filter);
+        let tasks = self.datastore.read().await.items(&filter).await;
         for task in tasks.into_iter() {
             api_tasks.push(Task {
                 correlation_id: task.correlation_id.as_hyphenated().to_string(),

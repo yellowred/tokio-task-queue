@@ -1,7 +1,9 @@
 use crate::model::CorrelationId;
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use tokio::sync::RwLock;
+
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
@@ -22,8 +24,8 @@ pub trait TaskDataStore {
         new_state: TaskState,
         new_retries: i32,
     ) -> Result<Uuid, DataStoreError>;
-    fn items(&self, filter: &Filter) -> Vec<Task>;
-    fn get(&self, uuid: Uuid) -> Result<Task, DataStoreError>;
+    async fn items(&self, filter: &Filter) -> Vec<Task>;
+    async fn get(&self, uuid: Uuid) -> Result<Task, DataStoreError>;
     async fn load_tasks(&mut self);
 }
 
@@ -79,8 +81,10 @@ impl Filter {
     }
 }
 
+type TasksStore = RwLock<HashMap<Uuid, Task>>;
+
 pub struct HashMapStorage<S: TaskStorage> {
-    tasks: Mutex<HashMap<Uuid, Task>>,
+    tasks: TasksStore,
     storage: Arc<tokio::sync::Mutex<S>>,
 }
 
@@ -91,7 +95,7 @@ where
     pub fn new(storage: S) -> Self {
         let hm = HashMap::new();
         Self {
-            tasks: Mutex::new(hm),
+            tasks: RwLock::new(hm),
             storage: Arc::new(tokio::sync::Mutex::new(storage)),
         }
     }
@@ -112,7 +116,7 @@ where
         let ts: Task;
         let uuid_val: Uuid;
         {
-            let mut tasks = self.tasks.lock().unwrap();
+            let mut tasks = self.tasks.write().await;
             if let Some(task) = tasks.get(&item.uuid) {
                 return Err(DataStoreError::Conflict(task.uuid));
             }
@@ -137,7 +141,7 @@ where
     ) -> Result<Uuid, DataStoreError> {
         let task_obj: Task;
         {
-            let mut tasks = self.tasks.lock().unwrap();
+            let mut tasks = self.tasks.write().await;
             let hashmap_res = tasks.get_mut(uuid);
             if let None = hashmap_res {
                 return Err(DataStoreError::NotFound(uuid.clone()));
@@ -161,8 +165,8 @@ where
         Ok(uuid.clone())
     }
 
-    fn items(&self, filter: &Filter) -> Vec<Task> {
-        let tasks = self.tasks.lock().unwrap();
+    async fn items(&self, filter: &Filter) -> Vec<Task> {
+        let tasks = self.tasks.read().await;
         let mut list = tasks.values().cloned().collect::<Vec<Task>>();
         match filter.state {
             Some(state) => list.retain(|task| task.state == state),
@@ -181,8 +185,15 @@ where
         list
     }
 
-    fn get(&self, uuid: Uuid) -> Result<Task, DataStoreError> {
-        let tasks = self.tasks.lock().unwrap();
+    async fn get(&self, uuid: Uuid) -> Result<Task, DataStoreError> {
+        let t1 = chrono::Utc::now().naive_utc();
+        let tasks = self.tasks.read().await;
+        info!(
+            latency =
+            %format!("{}", chrono::Utc::now().naive_utc().signed_duration_since(t1)),
+        "datastore: get task",
+        );
+
         match tasks.get(&uuid) {
             Some(task) => Ok(task.clone()),
             None => Err(DataStoreError::NotFound(uuid)),
@@ -192,13 +203,16 @@ where
     async fn load_tasks(&mut self) {
         info!("Loading tasks from storage...");
         let storage_items = self.storage.lock().await.items().await;
+        let mut counter = 0u32;
         for t in storage_items.iter() {
-            self.tasks.lock().unwrap().insert(t.uuid, t.clone());
+            self.tasks.write().await.insert(t.uuid, t.clone());
+            counter += 1;
         }
-        info!("Loaded tasks:  {}", self.tasks.lock().unwrap().len());
+        info!("Loaded tasks:  {}", counter);
     }
 }
 
+/*
 #[cfg(test)]
 mod tests {
     use crate::model::CorrelationId;
@@ -286,3 +300,4 @@ mod tests {
         assert_eq!(items.len(), 2);
     }
 }
+ */

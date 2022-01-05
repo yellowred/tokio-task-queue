@@ -6,7 +6,7 @@ mod executor;
 mod log;
 mod model;
 
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{mpsc, Mutex, RwLock};
 
 use dotenv::dotenv;
 use std::env;
@@ -33,7 +33,7 @@ fn main() {
 
     let storage = crate::datastore::MemoryTaskStorage::new();
     let datastore = datastore::HashMapStorage::new(storage);
-    let shared_datastore = Arc::new(Mutex::new(datastore));
+    let shared_datastore = Arc::new(RwLock::new(datastore));
     let mut controller =
         controller::TaskController::start(shared_datastore.clone(), tx_action, rx_execution_status);
     let term = Arc::new(AtomicBool::new(false));

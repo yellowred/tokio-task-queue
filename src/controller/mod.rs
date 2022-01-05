@@ -7,7 +7,7 @@ use tokio::runtime::{Builder, Runtime};
 use tokio::{
     sync::{
         mpsc::{Receiver, Sender},
-        Mutex,
+        RwLock,
     },
     time,
 };
@@ -20,11 +20,13 @@ use crate::datastore::TaskDataStore;
 use crate::executor::{self, ActionExecutionOutcome};
 use crate::model::{Action, Task, TaskState};
 
+type Shared<D> = Arc<RwLock<D>>;
+
 pub struct TaskController<D>
 where
     D: TaskDataStore,
 {
-    _datastore: Arc<Mutex<D>>,
+    _datastore: Shared<D>,
     _datastore_runtime: Runtime,
     _api_runtime: Runtime,
     _callback_runtime: Runtime,
@@ -36,7 +38,7 @@ where
     D: TaskDataStore + std::marker::Send + 'static + std::marker::Sync,
 {
     pub fn start(
-        datastore: Arc<Mutex<D>>,
+        datastore: Shared<D>,
         tx_action: Sender<Action>,
         rx_execution_status: Receiver<executor::ActionExecutionOutcome>,
     ) -> Self {
@@ -54,7 +56,7 @@ where
         Ok(())
     }
 
-    fn build_datastore_runtime(datastore: Arc<Mutex<D>>) -> Runtime {
+    fn build_datastore_runtime(datastore: Shared<D>) -> Runtime {
         let runtime = Builder::new_multi_thread()
             .thread_name("datastore")
             .enable_all()
@@ -62,13 +64,13 @@ where
             .expect("[datastore] failed to create runtime");
         {
             runtime.handle().spawn(async move {
-                datastore.clone().lock().await.load_tasks().await;
+                datastore.clone().write().await.load_tasks().await;
             });
         }
         runtime
     }
 
-    fn build_api_runtime(datastore: Arc<Mutex<D>>) -> Runtime {
+    fn build_api_runtime(datastore: Shared<D>) -> Runtime {
         let runtime = Builder::new_multi_thread()
             .thread_name("grpc-api")
             .enable_all()
@@ -81,7 +83,7 @@ where
     }
 
     fn build_callback_runtime(
-        datastore: Arc<Mutex<D>>,
+        datastore: Shared<D>,
         rx_execution_status: Receiver<executor::ActionExecutionOutcome>,
     ) -> Runtime {
         let runtime = Builder::new_multi_thread()
@@ -96,7 +98,7 @@ where
         runtime
     }
 
-    fn build_dispatcher_runtime(datastore: Arc<Mutex<D>>, tx_action: Sender<Action>) -> Runtime {
+    fn build_dispatcher_runtime(datastore: Shared<D>, tx_action: Sender<Action>) -> Runtime {
         let runtime = Builder::new_multi_thread()
             .thread_name("dispatcher")
             .enable_all()
@@ -114,7 +116,7 @@ where
         let handle_dispatch = async move {
             info!("Starting polling for new tasks...");
 
-            let mut interval = time::interval(Duration::from_micros(10));
+            let mut interval = time::interval(Duration::from_secs(1));
             loop {
                 interval.tick().await;
                 Self::poll_new_tasks(datastore.clone(), tx_action.clone()).await;
@@ -125,14 +127,11 @@ where
         runtime
     }
 
-    async fn poll_new_tasks(ds: Arc<Mutex<D>>, tx_action: Sender<Action>) {
+    async fn poll_new_tasks(ds: Shared<D>, tx_action: Sender<Action>) {
         let filter_new_tasks = crate::datastore::Filter::new_tasks();
         let mut tasks: Vec<Task> = vec![];
         {
-            let res = ds.try_lock();
-            if let Ok(ds) = res {
-                tasks = ds.items(&filter_new_tasks);
-            }
+            tasks = ds.read().await.items(&filter_new_tasks).await;
         }
         // Synchronously execute a batch of tasks,
         // so the poll_new_tasks will not be executed again in parallel by tokio::select!.
@@ -142,7 +141,7 @@ where
         }
     }
 
-    async fn periodic_state_dump(datastore: Arc<Mutex<D>>) {
+    async fn periodic_state_dump(datastore: Shared<D>) {
         let mut interval_15mins = time::interval(Duration::from_secs(60 * 15));
 
         info!("periodic_state_dump worker started");
@@ -151,28 +150,28 @@ where
             let _ = interval_15mins.tick().await;
             let mut stats: [usize; 6] = [0, 0, 0, 0, 0, 0];
             let mut filter_tasks = crate::datastore::Filter::new_tasks();
-            stats[0] = datastore.lock().await.items(&filter_tasks).len();
+            stats[0] = datastore.read().await.items(&filter_tasks).await.len();
 
             filter_tasks.state = Some(crate::model::TaskState::Processing);
-            stats[1] = datastore.lock().await.items(&filter_tasks).len();
+            stats[1] = datastore.read().await.items(&filter_tasks).await.len();
 
             filter_tasks.state = Some(TaskState::Inprogress);
-            stats[2] = datastore.lock().await.items(&filter_tasks).len();
+            stats[2] = datastore.read().await.items(&filter_tasks).await.len();
 
             filter_tasks.state = Some(TaskState::Failed);
-            stats[3] = datastore.lock().await.items(&filter_tasks).len();
+            stats[3] = datastore.read().await.items(&filter_tasks).await.len();
 
             filter_tasks.state = Some(TaskState::Success);
-            stats[4] = datastore.lock().await.items(&filter_tasks).len();
+            stats[4] = datastore.read().await.items(&filter_tasks).await.len();
 
             filter_tasks.state = Some(TaskState::Died);
-            stats[5] = datastore.lock().await.items(&filter_tasks).len();
+            stats[5] = datastore.read().await.items(&filter_tasks).await.len();
 
             info!("Datastore items stats: {:?}", stats);
         }
     }
 
-    async fn auto_retry_tasks(datastore: Arc<Mutex<D>>, tx_action: Sender<Action>) {
+    async fn auto_retry_tasks(datastore: Shared<D>, tx_action: Sender<Action>) {
         let filter_failed_tasks = crate::datastore::Filter::failed_tasks();
         let filter_inprogress_tasks = crate::datastore::Filter::inprogress_tasks();
         info!("poll_retry_tasks worker started");
@@ -181,14 +180,9 @@ where
         loop {
             interval.tick().await;
             let mut tasks: Vec<Task> = vec![];
-            {
-                let _ = datastore.try_lock().and_then(|ds| {
-                    tasks = ds.items(&filter_failed_tasks);
-                    let mut tasks_inprogress = ds.items(&filter_inprogress_tasks);
-                    tasks.append(&mut tasks_inprogress);
-                    Ok(())
-                });
-            }
+            tasks = datastore.read().await.items(&filter_failed_tasks).await;
+            let mut tasks_inprogress = datastore.read().await.items(&filter_inprogress_tasks).await;
+            tasks.append(&mut tasks_inprogress);
 
             // TODO try futures::future::join_all(
             while let Some(task) = tasks.pop() {
@@ -201,7 +195,7 @@ where
     }
 
     async fn handle_callback(
-        ds: Arc<Mutex<D>>,
+        ds: Shared<D>,
         mut rx_execution_status: Receiver<executor::ActionExecutionOutcome>,
     ) {
         info!("Starting callback loop...");
@@ -217,32 +211,28 @@ where
     }
 
     // Send a message to Executor that requests a task execution
-    async fn send_to_executor(ds: Arc<Mutex<D>>, tx_action: Sender<Action>, task: Task) {
-        info!(
+    async fn send_to_executor(ds: Shared<D>, tx_action: Sender<Action>, task: Task) {
+        debug!(
             uuid = &*task.uuid.to_string(),
             state=%format!("{:?}", task.state),
             "execute task"
         );
 
-        Self::task_update_locking(ds.clone(), &task, TaskState::Processing).await;
-        info!(
-            uuid = &*task.uuid.to_string(),
-            state=%format!("{:?}", task.state),
-            "execute task2"
-        );
+        // Self::task_update_locking(ds.clone(), &task, TaskState::Processing).await;
+        // info!(
+        //     uuid = &*task.uuid.to_string(),
+        //     state=%format!("{:?}", task.state),
+        //     "execute task2"
+        // );
         match Action::new(&task) {
             Ok(action) => {
-                info!(
-                    uuid = &*task.uuid.to_string(),
-                    state=%format!("{:?}", task.state),
-                    "task action: {:?}",
-                    action,
-                );
                 match tx_action.send(action).await {
                     Ok(_) => {
                         info!(
                             uuid = &*task.uuid.to_string(),
                             state=%format!("{:?}", task.state),
+                            latency =
+                            %format!("{}", chrono::Utc::now().naive_utc().signed_duration_since(task.updated_at.unwrap_or(task.timestamp))),
                             "task state change: {:?} -> {:?}",
                             task.state,
                             TaskState::Inprogress
@@ -270,7 +260,7 @@ where
         }
     }
 
-    async fn task_update_locking(ds_ref: Arc<Mutex<D>>, task: &Task, new_state: TaskState) {
+    async fn task_update_locking(ds_ref: Shared<D>, task: &Task, new_state: TaskState) {
         let mut new_retries = task.retries;
         if new_state == TaskState::Inprogress {
             new_retries = task.retries + 1;
@@ -281,18 +271,22 @@ where
             );
         }
 
-        let mut ds = ds_ref.lock().await;
-        match ds.update_state(&task.uuid, new_state, new_retries).await {
+        match ds_ref
+            .write()
+            .await
+            .update_state(&task.uuid, new_state, new_retries)
+            .await
+        {
             Ok(_) => {
-                let _ = ds.get(task.uuid).and_then(|task_updated| {
-                    info!(
-                        uuid = &*task.uuid.to_string(),
-                        state = %format!("{:?}", task_updated.state),
-                        retries = task_updated.retries,
-                        "task update",
-                    );
-                    Ok(())
-                });
+                // let _ = ds.get(task.uuid).and_then(|task_updated| {
+                //     info!(
+                //         uuid = &*task.uuid.to_string(),
+                //         state = %format!("{:?}", task_updated.state),
+                //         retries = task_updated.retries,
+                //         "task update",
+                //     );
+                //     Ok(())
+                // });
             }
             Err(err) => {
                 error!(reason = %err, "Failed to update task state in datastore.");
@@ -301,8 +295,23 @@ where
         }
     }
 
-    async fn callback_receiver(ds_ref: Arc<Mutex<D>>, msg: ActionExecutionOutcome) {
-        let res = { ds_ref.lock().await.get(msg.action.uuid) };
+    async fn callback_receiver(ds_ref: Shared<D>, msg: ActionExecutionOutcome) {
+        let t1 = chrono::Utc::now().naive_utc();
+        let mut t2 = chrono::Utc::now().naive_utc();
+        let res = {
+            let _ds = ds_ref.read().await;
+            t2 = chrono::Utc::now().naive_utc();
+            _ds.get(msg.action.uuid).await
+        };
+        info!(
+            latency =
+            %format!("{}", chrono::Utc::now().naive_utc().signed_duration_since(t1)),
+            latency1 =
+            %format!("{}", t2.signed_duration_since(t1)),
+            latency2 =
+            %format!("{}", chrono::Utc::now().naive_utc().signed_duration_since(t2)),
+        "callback: fetch task",
+        );
         match res {
             Ok(task) => match msg.outcome {
                 Ok(mut tasks) => {
@@ -310,11 +319,13 @@ where
                         uuid = msg.action.uuid.to_string().as_str(),
                         tasks_number = tasks.len(),
                         status = "OK",
+                        latency =
+                            %format!("{}", chrono::Utc::now().naive_utc().signed_duration_since(task.updated_at.unwrap_or(task.timestamp))),
                         "callback received",
                     );
                     while let Some(task) = tasks.pop() {
                         if let Err(err) = ds_ref
-                            .lock()
+                            .write()
                             .await
                             .add(task.name, task.correlation_id, task.parameters)
                             .await
@@ -366,14 +377,14 @@ mod tests {
     async fn test_poll_invalid_tasks() {
         // GIVEN
         let storage = crate::datastore::MemoryTaskStorage::new();
-        let ds_cont = Arc::new(Mutex::new(HashMapStorage::new(storage)));
+        let ds_cont = Arc::new(RwLock::new(HashMapStorage::new(storage)));
         let (tx_action, _) = channel::<Action>(32);
         let mut uuids: [Uuid; 2] = [Uuid::default(), Uuid::default()];
         {
             let mut params = HashMap::new();
             params.insert("program".to_string(), "ssh".to_string());
             uuids[0] = ds_cont
-                .lock()
+                .write()
                 .await
                 .add(
                     "program".to_string(),
@@ -384,7 +395,7 @@ mod tests {
                 .await
                 .unwrap();
             uuids[1] = ds_cont
-                .lock()
+                .write()
                 .await
                 .add(
                     "invalid".to_string(),
@@ -402,8 +413,8 @@ mod tests {
         // THEN
         // all tasks state changed to in_progress
         let tasks_state = {
-            let ds = ds_cont.lock().await;
-            let tasks = ds.items(&crate::datastore::Filter::default());
+            let ds = ds_cont.read().await;
+            let tasks = ds.items(&crate::datastore::Filter::default()).await;
             tasks.iter().all(|task| task.state == TaskState::Died)
         };
         assert!(tasks_state);
@@ -413,14 +424,14 @@ mod tests {
     async fn test_poll_new_tasks() {
         // GIVEN
         let storage = crate::datastore::MemoryTaskStorage::new();
-        let ds_cont = Arc::new(Mutex::new(HashMapStorage::new(storage)));
+        let ds_cont = Arc::new(RwLock::new(HashMapStorage::new(storage)));
         let (tx_action, mut rx_action) = channel::<Action>(32);
         let mut uuids: [Uuid; 2] = [Uuid::default(), Uuid::default()];
         {
             let mut params = HashMap::new();
             params.insert("program".to_string(), "ssh".to_string());
             uuids[0] = ds_cont
-                .lock()
+                .write()
                 .await
                 .add(
                     "program".to_string(),
@@ -431,7 +442,7 @@ mod tests {
                 .await
                 .unwrap();
             uuids[1] = ds_cont
-                .lock()
+                .write()
                 .await
                 .add(
                     "program".to_string(),
@@ -457,8 +468,8 @@ mod tests {
 
         // all tasks state changed to in_progress
         let tasks_state = {
-            let ds = ds_cont.lock().await;
-            let tasks = ds.items(&crate::datastore::Filter::default());
+            let ds = ds_cont.read().await;
+            let tasks = ds.items(&crate::datastore::Filter::default()).await;
             tasks.iter().all(|task| task.state == TaskState::Inprogress)
         };
         assert!(tasks_state);
@@ -468,11 +479,11 @@ mod tests {
     async fn test_handle_callback() {
         // GIVEN
         let storage = crate::datastore::MemoryTaskStorage::new();
-        let ds_cont = Arc::new(Mutex::new(HashMapStorage::new(storage)));
+        let ds_cont = Arc::new(RwLock::new(HashMapStorage::new(storage)));
         let (tx_out, rx_out) = channel::<ActionExecutionOutcome>(32);
         let mut uuids: [Uuid; 2] = [Uuid::default(), Uuid::default()];
         {
-            let mut ds = ds_cont.lock().await;
+            let mut ds = ds_cont.write().await;
 
             // let mut params: HashMap<String, String> = HashMap::new();
             // params.insert("program".to_string(), "ssh".to_string());
@@ -545,8 +556,8 @@ mod tests {
         // all tasks state changed to success
         let tasks_state = {
             let mut res: HashMap<String, TaskState> = HashMap::new();
-            let ds = ds_cont.lock().await;
-            let tasks = ds.items(&crate::datastore::Filter::default());
+            let ds = ds_cont.read().await;
+            let tasks = ds.items(&crate::datastore::Filter::default()).await;
             for task in tasks.iter() {
                 res.insert(task.uuid.to_string(), task.state);
             }
@@ -567,11 +578,11 @@ mod tests {
     async fn test_autoretry() {
         // GIVEN
         let storage = crate::datastore::MemoryTaskStorage::new();
-        let ds_cont = Arc::new(Mutex::new(HashMapStorage::new(storage)));
+        let ds_cont = Arc::new(RwLock::new(HashMapStorage::new(storage)));
         let (tx_action, mut rx_action) = channel::<Action>(32);
         let mut uuids: [Uuid; 2] = [Uuid::default(), Uuid::default()];
         {
-            let mut ds = ds_cont.lock().await;
+            let mut ds = ds_cont.write().await;
 
             // let mut params: HashMap<String, String> = HashMap::new();
             // params.insert("program".to_string(), "ssh".to_string());
@@ -621,8 +632,8 @@ mod tests {
         assert_eq!(action1.uuid, uuids[1]);
 
         // all tasks state changed to in_progress
-        let ds = ds_cont.lock().await;
-        let items = ds.items(&crate::datastore::Filter::default());
+        let ds = ds_cont.read().await;
+        let items = ds.items(&crate::datastore::Filter::default()).await;
         let mut tasks_state = items
             .iter()
             .filter(|task| task.state == TaskState::Inprogress);
