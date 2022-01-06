@@ -8,6 +8,7 @@ pub mod proto {
 use crate::model::CorrelationId;
 use anyhow::Result;
 use proto::{task_queue_server::TaskQueue, FilterParams, Task, TaskList, TaskQueueResult};
+use uuid::Uuid;
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -18,15 +19,17 @@ use tracing::{error, info, span, Level};
 
 pub struct Server<D> {
     datastore: Arc<RwLock<D>>,
+    controller_sender: Sender<Action>,
 }
 
 impl<D> Server<D>
 where
     D: std::marker::Sync,
 {
-    pub fn new(datastore: Arc<RwLock<D>>) -> Server<D> {
+    pub fn new(datastore: Arc<RwLock<D>>, controller_sender: Sender<Action>) -> Server<D> {
         return Server {
-            datastore: datastore,
+            datastore,
+            controller_sender,
         };
     }
 
@@ -51,6 +54,25 @@ where
         }
         Ok(())
     }
+
+    fn send_to_executor(&self) -> Result<String, KeycloakError> {
+        let uuid = self
+            .datastore
+            .write()
+            .await
+            .add(task.name, correlation_id, task.parameters)
+            .await?;
+        tx_action.send(Action::new(&task)?).await?;
+        Ok(uuid.to_string())
+    }
+
+    pub async fn controller_publish(&self, task: Task) -> Result<SubmissionStatus> {
+        let (req_sender, callback) = tokio::sync::oneshot::channel();
+
+        self.controller_sender.clone().send(task).await?;
+
+        callback.await?
+    }
 }
 
 #[tonic::async_trait]
@@ -61,19 +83,19 @@ where
     async fn publish(&self, request: Request<Task>) -> Result<Response<TaskQueueResult>, Status> {
         let correlation_id = CorrelationId::from_tonic_metadata(request.metadata())?;
 
-        let mut ds = self.datastore.write().await;
+        // let mut ds = self.datastore.write().await;
         let task: Task = request.into_inner();
-        match ds.add(task.name, correlation_id, task.parameters).await {
-            Ok(uuid) => {
+
+        self.controller_publish(task)
+            .await
+            .map_err(|err| Status::unknown(format!("task push failed: {:?}", err_code)))
+            .and_then(|uuid| {
                 let reply = TaskQueueResult {
-                    result_id: uuid.to_string(),
+                    result_id: uuid,
                     status: proto::task_queue_result::Status::Ok as i32,
                 };
-
                 Ok(Response::new(reply))
-            }
-            Err(err_code) => Err(Status::unknown(format!("task push failed: {:?}", err_code))),
-        }
+            })
     }
 
     async fn list(&self, request: Request<FilterParams>) -> Result<Response<TaskList>, Status> {
