@@ -1,7 +1,8 @@
-use crate::model::CorrelationId;
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use tokio::sync::RwLock;
+
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
@@ -10,20 +11,15 @@ use crate::model::{error::ModelError, Task, TaskState};
 
 #[tonic::async_trait]
 pub trait TaskDataStore {
-    async fn add(
-        &mut self,
-        name: String,
-        correlation_id: CorrelationId,
-        params: HashMap<String, String>,
-    ) -> Result<Uuid, DataStoreError>;
+    async fn add(&mut self, item: Task) -> Result<(), DataStoreError>;
     async fn update_state(
         &mut self,
         uuid: &Uuid,
         new_state: TaskState,
         new_retries: i32,
     ) -> Result<Uuid, DataStoreError>;
-    fn items(&self, filter: &Filter) -> Vec<Task>;
-    fn get(&self, uuid: Uuid) -> Result<Task, DataStoreError>;
+    async fn items(&self, filter: &Filter) -> Vec<Task>;
+    async fn get(&self, uuid: &Uuid) -> Result<Task, DataStoreError>;
     async fn load_tasks(&mut self);
 }
 
@@ -79,8 +75,10 @@ impl Filter {
     }
 }
 
+type TasksStore = RwLock<HashMap<Uuid, Task>>;
+
 pub struct HashMapStorage<S: TaskStorage> {
-    tasks: Mutex<HashMap<Uuid, Task>>,
+    tasks: TasksStore,
     storage: Arc<tokio::sync::Mutex<S>>,
 }
 
@@ -91,7 +89,7 @@ where
     pub fn new(storage: S) -> Self {
         let hm = HashMap::new();
         Self {
-            tasks: Mutex::new(hm),
+            tasks: RwLock::new(hm),
             storage: Arc::new(tokio::sync::Mutex::new(storage)),
         }
     }
@@ -102,31 +100,22 @@ impl<S> TaskDataStore for HashMapStorage<S>
 where
     S: TaskStorage,
 {
-    async fn add(
-        &mut self,
-        name: String,
-        correlation_id: CorrelationId,
-        params: HashMap<String, String>,
-    ) -> Result<Uuid, DataStoreError> {
-        let item = Task::new(name, correlation_id, params);
-        let ts: Task;
-        let uuid_val: Uuid;
-        {
-            let mut tasks = self.tasks.lock().unwrap();
-            if let Some(task) = tasks.get(&item.uuid) {
-                return Err(DataStoreError::Conflict(task.uuid));
-            }
-            uuid_val = item.uuid.clone();
-            tasks.insert(item.uuid, item);
-            ts = tasks.get(&uuid_val).unwrap().clone();
+    async fn add(&mut self, item: Task) -> Result<(), DataStoreError> {
+        if let Some(_) = self.tasks.read().await.get(&item.uuid) {
+            return Err(DataStoreError::Conflict(item.uuid));
         }
 
+        self.tasks
+            .write()
+            .await
+            .insert(item.uuid.clone(), item.clone());
+
         // store in persistence;
-        if let Err(err) = self.storage.lock().await.store(ts).await {
+        if let Err(err) = self.storage.lock().await.store(item).await {
             error!("Failed to peristently store the task: {:?}.", err);
         }
 
-        Ok(uuid_val)
+        Ok(())
     }
 
     async fn update_state(
@@ -135,9 +124,14 @@ where
         new_state: TaskState,
         new_retries: i32,
     ) -> Result<Uuid, DataStoreError> {
+        info!(
+            "Update state: {}: {:?}.",
+            uuid.to_hyphenated().to_string(),
+            new_state
+        );
         let task_obj: Task;
         {
-            let mut tasks = self.tasks.lock().unwrap();
+            let mut tasks = self.tasks.write().await;
             let hashmap_res = tasks.get_mut(uuid);
             if let None = hashmap_res {
                 return Err(DataStoreError::NotFound(uuid.clone()));
@@ -161,8 +155,8 @@ where
         Ok(uuid.clone())
     }
 
-    fn items(&self, filter: &Filter) -> Vec<Task> {
-        let tasks = self.tasks.lock().unwrap();
+    async fn items(&self, filter: &Filter) -> Vec<Task> {
+        let tasks = self.tasks.read().await;
         let mut list = tasks.values().cloned().collect::<Vec<Task>>();
         match filter.state {
             Some(state) => list.retain(|task| task.state == state),
@@ -181,21 +175,23 @@ where
         list
     }
 
-    fn get(&self, uuid: Uuid) -> Result<Task, DataStoreError> {
-        let tasks = self.tasks.lock().unwrap();
-        match tasks.get(&uuid) {
+    async fn get(&self, uuid: &Uuid) -> Result<Task, DataStoreError> {
+        let tasks = self.tasks.read().await;
+        match tasks.get(uuid) {
             Some(task) => Ok(task.clone()),
-            None => Err(DataStoreError::NotFound(uuid)),
+            None => Err(DataStoreError::NotFound(uuid.clone())),
         }
     }
 
     async fn load_tasks(&mut self) {
         info!("Loading tasks from storage...");
         let storage_items = self.storage.lock().await.items().await;
+        let mut counter = 0u32;
         for t in storage_items.iter() {
-            self.tasks.lock().unwrap().insert(t.uuid, t.clone());
+            self.tasks.write().await.insert(t.uuid, t.clone());
+            counter += 1;
         }
-        info!("Loaded tasks:  {}", self.tasks.lock().unwrap().len());
+        info!("Loaded tasks:  {}", counter);
     }
 }
 
@@ -227,62 +223,58 @@ mod tests {
         let mut ds = HashMapStorage::new(storage);
 
         // no tasks in the beginning
-        let mut items = ds.items(&Filter::success_tasks());
+        let mut items = ds.items(&Filter::success_tasks()).await;
         assert_eq!(items.len(), 0);
 
         // tasks are being loaded from the persistence
         ds.load_tasks().await;
-        items = ds.items(&Filter::success_tasks());
+        items = ds.items(&Filter::success_tasks()).await;
         assert_eq!(items.len(), 2);
 
         // CRU(no delete) tasks
-        let uuid = ds
-            .add(
-                "program".to_string(),
-                CorrelationId::try_from(&"00000000-0000-0000-0000-000000000000".to_string())
-                    .unwrap(),
-                HashMap::new(),
-            )
-            .await
-            .unwrap();
-        let mut task = ds.get(uuid).unwrap();
 
-        assert_eq!(task.uuid, uuid);
-        assert_eq!(task.state, TaskState::New);
+        let task1 = Task::new(
+            "program".to_string(),
+            CorrelationId::try_from(&"00000000-0000-0000-0000-000000000000".to_string()).unwrap(),
+            HashMap::new(),
+        );
+        ds.add(task1.clone()).await.unwrap();
+        let mut task2 = ds.get(&task1.uuid).await.unwrap();
 
-        let uuid2 = ds
-            .add(
-                "dummy2".to_string(),
-                CorrelationId::try_from(&"00000000-0000-0000-0000-000000000000".to_string())
-                    .unwrap(),
-                HashMap::new(),
-            )
-            .await
-            .unwrap();
-        let task2 = ds.get(uuid2).unwrap();
+        assert_eq!(task2.uuid, task1.uuid);
+        assert_eq!(task2.state, task1.state);
 
-        assert_eq!(task2.uuid, uuid2);
-        assert_eq!(task2.state, TaskState::New);
+        let task3 = Task::new(
+            "dummy2".to_string(),
+            CorrelationId::try_from(&"00000000-0000-0000-0000-000000000000".to_string()).unwrap(),
+            HashMap::new(),
+        );
+        ds.add(task3.clone()).await.unwrap();
+        let mut task4 = ds.get(&task3.uuid).await.unwrap();
 
-        ds.update_state(&task.uuid, TaskState::Inprogress, task.retries + 1)
+        assert_eq!(task4.uuid, task3.uuid);
+        assert_eq!(task4.state, task3.state);
+        assert_eq!(task4.state, TaskState::New);
+
+        ds.update_state(&task1.uuid, TaskState::Inprogress, task1.retries + 1)
             .await
             .unwrap();
 
         // task changes state
-        task = ds.get(uuid).unwrap();
-        assert_eq!(task.state, TaskState::Inprogress);
+        task2 = ds.get(&task1.uuid).await.unwrap();
+        assert_eq!(task2.state, TaskState::Inprogress);
 
         // other task does not change it's state
-        task = ds.get(uuid2).unwrap();
-        assert_eq!(task.state, TaskState::New);
+        task4 = ds.get(&task3.uuid).await.unwrap();
+        assert_eq!(task4.state, TaskState::New);
 
         // list shows 1 new task
-        items = ds.items(&Filter::new_tasks());
+        items = ds.items(&Filter::new_tasks()).await;
         assert_eq!(items.len(), 1);
-        assert_eq!(items.last().unwrap().uuid, uuid2);
+        assert_eq!(items.last().unwrap().uuid, task3.uuid);
 
         // success tasks are still present
-        items = ds.items(&Filter::success_tasks());
+        items = ds.items(&Filter::success_tasks()).await;
         assert_eq!(items.len(), 2);
     }
 }

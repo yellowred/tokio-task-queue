@@ -6,7 +6,7 @@ mod executor;
 mod log;
 mod model;
 
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{mpsc, RwLock};
 
 use dotenv::dotenv;
 use std::env;
@@ -23,7 +23,7 @@ use model::Action;
 fn main() {
     dotenv().ok();
     let env_filter = EnvFilter::try_from_env("TASKQUEUE_LOG");
-    log::setup(false, env_filter, &None);
+    log::setup(env_filter);
 
     event!(Level::INFO, "Starting TaskQueue: {}", env!("FULL_VERSION"));
 
@@ -33,7 +33,7 @@ fn main() {
 
     let storage = crate::datastore::MemoryTaskStorage::new();
     let datastore = datastore::HashMapStorage::new(storage);
-    let shared_datastore = Arc::new(Mutex::new(datastore));
+    let shared_datastore = Arc::new(RwLock::new(datastore));
     let mut controller =
         controller::TaskController::start(shared_datastore.clone(), tx_action, rx_execution_status);
     let term = Arc::new(AtomicBool::new(false));

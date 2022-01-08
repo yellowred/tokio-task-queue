@@ -1779,6 +1779,7 @@ dependencies = [
  "httpmock",
  "humantime",
  "hyper",
+ "parking_lot",
  "prost",
  "rand",
  "reqwest",
@@ -1792,8 +1793,9 @@ dependencies = [
  "tonic",
  "tonic-build",
  "tracing",
+ "tracing-flame",
  "tracing-futures",
- "tracing-subscriber",
+ "tracing-subscriber 0.2.25",
  "url",
  "uuid",
  "versionisator",
@@ -2095,6 +2097,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "tracing-flame"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0bae117ee14789185e129aaee5d93750abe67fdc5a9a62650452bfe4e122a3a9"
+dependencies = [
+ "lazy_static",
+ "tracing",
+ "tracing-subscriber 0.3.5",
+]
+
+[[package]]
 name = "tracing-futures"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2145,6 +2158,18 @@ dependencies = [
  "tracing-core",
  "tracing-log",
  "tracing-serde",
+]
+
+[[package]]
+name = "tracing-subscriber"
+version = "0.3.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5d81bfa81424cc98cb034b837c985b7a290f592e5b4322f353f94a0ab0f9f594"
+dependencies = [
+ "sharded-slab",
+ "smallvec",
+ "thread_local",
+ "tracing-core",
 ]
 
 [[package]]

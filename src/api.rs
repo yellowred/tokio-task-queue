@@ -1,3 +1,4 @@
+use crate::controller::{ControllerRequest, ControllerRequestPublisher};
 use crate::datastore::TaskDataStore;
 pub use crate::datastore::{Filter, HashMapStorage, MemoryTaskStorage};
 
@@ -12,18 +13,26 @@ use proto::{task_queue_server::TaskQueue, FilterParams, Task, TaskList, TaskQueu
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::RwLock;
 use tonic::{Request, Response, Status};
-use tracing::{error, info, span, Level};
+use tracing::{error, info};
 
 pub struct Server<D> {
-    datastore: Arc<Mutex<D>>,
+    datastore: Arc<RwLock<D>>,
+    controller_sender: ControllerRequestPublisher,
 }
 
-impl<D> Server<D> {
-    pub fn new(datastore: Arc<Mutex<D>>) -> Server<D> {
+impl<D> Server<D>
+where
+    D: std::marker::Sync,
+{
+    pub fn new(
+        datastore: Arc<RwLock<D>>,
+        controller_sender: ControllerRequestPublisher,
+    ) -> Server<D> {
         return Server {
-            datastore: datastore,
+            datastore,
+            controller_sender,
         };
     }
 
@@ -48,52 +57,63 @@ impl<D> Server<D> {
         }
         Ok(())
     }
+
+    pub async fn controller_publish(&self, task: crate::model::Task) -> Result<()> {
+        let (req_sender, callback) = tokio::sync::oneshot::channel();
+
+        self.controller_sender
+            .send(ControllerRequest::SubmitTask(task, req_sender))
+            .await?;
+
+        // do not await callback for faster api reposonse
+        tokio::spawn(async move {
+            match callback.await {
+                Ok(v) => {
+                    if let Err(err) = v {
+                        error!(reason = %err, "task publish callback error")
+                    }
+                }
+                Err(err) => {
+                    error!(reason = %err, "task publish callback receiver error")
+                }
+            }
+        });
+
+        Ok(())
+    }
 }
 
 #[tonic::async_trait]
 impl<D> TaskQueue for Server<D>
 where
-    D: TaskDataStore + Send + 'static,
+    D: TaskDataStore + Send + 'static + std::marker::Sync,
 {
     async fn publish(&self, request: Request<Task>) -> Result<Response<TaskQueueResult>, Status> {
         let correlation_id = CorrelationId::from_tonic_metadata(request.metadata())?;
-        let span = span!(
-            Level::INFO,
-            "publish",
-            correlation_id = %correlation_id,
-        );
-        let _guard = span.enter();
 
-        let mut ds = self.datastore.lock().await;
+        // let mut ds = self.datastore.write().await;
         let task: Task = request.into_inner();
-        match ds.add(task.name, correlation_id, task.parameters).await {
-            Ok(uuid) => {
+        let model_task = crate::model::Task::new(task.name, correlation_id, task.parameters);
+
+        self.controller_publish(model_task.clone())
+            .await
+            .map_err(|err_code| Status::unknown(format!("task push failed: {:?}", err_code)))
+            .and_then(|_| {
                 let reply = TaskQueueResult {
-                    result_id: uuid.to_string(),
+                    result_id: model_task.uuid.to_hyphenated().to_string(),
                     status: proto::task_queue_result::Status::Ok as i32,
                 };
-
                 Ok(Response::new(reply))
-            }
-            Err(err_code) => Err(Status::unknown(format!("task push failed: {:?}", err_code))),
-        }
+            })
     }
 
     async fn list(&self, request: Request<FilterParams>) -> Result<Response<TaskList>, Status> {
-        let correlation_id = CorrelationId::from_tonic_metadata(request.metadata())?;
-        let span = span!(
-            Level::INFO,
-            "list",
-            correlation_id = %correlation_id,
-        );
-        let _guard = span.enter();
-
         let mut api_tasks: Vec<Task> = Vec::new();
 
         let mut filter = Filter::default();
         let filter_requested: FilterParams = request.into_inner();
         filter.state = Some(filter_requested.status());
-        let tasks = self.datastore.lock().await.items(&filter);
+        let tasks = self.datastore.read().await.items(&filter).await;
         for task in tasks.into_iter() {
             api_tasks.push(Task {
                 correlation_id: task.correlation_id.as_hyphenated().to_string(),
