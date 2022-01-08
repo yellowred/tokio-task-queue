@@ -1,3 +1,4 @@
+use crate::controller::{ControllerRequest, ControllerRequestPublisher};
 use crate::datastore::TaskDataStore;
 pub use crate::datastore::{Filter, HashMapStorage, MemoryTaskStorage};
 
@@ -8,25 +9,27 @@ pub mod proto {
 use crate::model::CorrelationId;
 use anyhow::Result;
 use proto::{task_queue_server::TaskQueue, FilterParams, Task, TaskList, TaskQueueResult};
-use uuid::Uuid;
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::RwLock;
 use tonic::{Request, Response, Status};
-use tracing::{error, info, span, Level};
+use tracing::{error, info};
 
 pub struct Server<D> {
     datastore: Arc<RwLock<D>>,
-    controller_sender: Sender<Action>,
+    controller_sender: ControllerRequestPublisher,
 }
 
 impl<D> Server<D>
 where
     D: std::marker::Sync,
 {
-    pub fn new(datastore: Arc<RwLock<D>>, controller_sender: Sender<Action>) -> Server<D> {
+    pub fn new(
+        datastore: Arc<RwLock<D>>,
+        controller_sender: ControllerRequestPublisher,
+    ) -> Server<D> {
         return Server {
             datastore,
             controller_sender,
@@ -55,23 +58,28 @@ where
         Ok(())
     }
 
-    fn send_to_executor(&self) -> Result<String, KeycloakError> {
-        let uuid = self
-            .datastore
-            .write()
-            .await
-            .add(task.name, correlation_id, task.parameters)
-            .await?;
-        tx_action.send(Action::new(&task)?).await?;
-        Ok(uuid.to_string())
-    }
-
-    pub async fn controller_publish(&self, task: Task) -> Result<SubmissionStatus> {
+    pub async fn controller_publish(&self, task: crate::model::Task) -> Result<()> {
         let (req_sender, callback) = tokio::sync::oneshot::channel();
 
-        self.controller_sender.clone().send(task).await?;
+        self.controller_sender
+            .send(ControllerRequest::SubmitTask(task, req_sender))
+            .await?;
 
-        callback.await?
+        // do not await callback for faster api reposonse
+        tokio::spawn(async move {
+            match callback.await {
+                Ok(v) => {
+                    if let Err(err) = v {
+                        error!(reason = %err, "task publish callback error")
+                    }
+                }
+                Err(err) => {
+                    error!(reason = %err, "task publish callback receiver error")
+                }
+            }
+        });
+
+        Ok(())
     }
 }
 
@@ -85,13 +93,14 @@ where
 
         // let mut ds = self.datastore.write().await;
         let task: Task = request.into_inner();
+        let model_task = crate::model::Task::new(task.name, correlation_id, task.parameters);
 
-        self.controller_publish(task)
+        self.controller_publish(model_task.clone())
             .await
-            .map_err(|err| Status::unknown(format!("task push failed: {:?}", err_code)))
-            .and_then(|uuid| {
+            .map_err(|err_code| Status::unknown(format!("task push failed: {:?}", err_code)))
+            .and_then(|_| {
                 let reply = TaskQueueResult {
-                    result_id: uuid,
+                    result_id: model_task.uuid.to_hyphenated().to_string(),
                     status: proto::task_queue_result::Status::Ok as i32,
                 };
                 Ok(Response::new(reply))

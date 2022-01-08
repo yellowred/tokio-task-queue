@@ -6,7 +6,7 @@ mod executor;
 mod log;
 mod model;
 
-use tokio::sync::{mpsc, Mutex, RwLock};
+use tokio::sync::{mpsc, RwLock};
 
 use dotenv::dotenv;
 use std::env;
@@ -23,7 +23,7 @@ use model::Action;
 fn main() {
     dotenv().ok();
     let env_filter = EnvFilter::try_from_env("TASKQUEUE_LOG");
-    log::setup(false, env_filter, &None);
+    log::setup(env_filter);
 
     event!(Level::INFO, "Starting TaskQueue: {}", env!("FULL_VERSION"));
 
