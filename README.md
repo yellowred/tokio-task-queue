@@ -25,40 +25,40 @@ Run tests:
 cargo test
 ```
 
-### Benchmark
+### Benchmark (Mac M1)
 
 ```
- ghz  --insecure --proto ./proto/taskqueue.proto --call taskqueue.v1.TaskQueue/publish -m '{"correlation-id": "b7b054ca-0d37-418b-ab16-ebe8aa409285"}' -d "{\"name\": \"service\", \"stream\": \"loadtest.v1\", \"parameters\": {\"url\": \"http://localhost:3001/bump_counter\", \"method\": \"GET\"}}" -n 100000 -c 16 --connections=10 localhost:50051
+ghz  --insecure --proto ./proto/taskqueue.proto --call taskqueue.v1.TaskQueue/publish -m '{"correlation-id": "b7b054ca-0d37-418b-ab16-ebe8aa409285"}' -d "{\"name\": \"service\", \"stream\": \"loadtest.v1\", \"parameters\": {\"url\": \"http://localhost:3001/bump_counter\", \"method\": \"GET\"}}" -n 100000 -c 100 --connections=100 localhost:8001
 
 Summary:
   Count:	100000
-  Total:	6.69 s
-  Slowest:	13.08 ms
-  Fastest:	0.04 ms
-  Average:	0.35 ms
-  Requests/sec:	14944.19
+  Total:	5.57 s
+  Slowest:	50.40 ms
+  Fastest:	0.06 ms
+  Average:	1.67 ms
+  Requests/sec:	17941.79
 
 Response time histogram:
-  0.044  [1]     |
-  1.348  [97113] |∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎
-  2.651  [2236]  |∎
-  3.955  [351]   |
-  5.259  [139]   |
-  6.563  [36]    |
-  7.866  [16]    |
-  9.170  [25]    |
-  10.474 [23]    |
-  11.777 [48]    |
-  13.081 [12]    |
+  0.059  [1]     |
+  5.093  [92061] |∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎
+  10.128 [4585]  |∎∎
+  15.162 [2245]  |∎
+  20.196 [688]   |
+  25.230 [267]   |
+  30.264 [100]   |
+  35.298 [31]    |
+  40.333 [14]    |
+  45.367 [5]     |
+  50.401 [3]     |
 
 Latency distribution:
-  10 % in 0.10 ms
-  25 % in 0.13 ms
-  50 % in 0.21 ms
-  75 % in 0.38 ms
-  90 % in 0.70 ms
-  95 % in 1.03 ms
-  99 % in 2.18 ms
+  10 % in 0.18 ms
+  25 % in 0.30 ms
+  50 % in 0.60 ms
+  75 % in 1.43 ms
+  90 % in 4.18 ms
+  95 % in 7.44 ms
+  99 % in 15.61 ms
 
 Status code distribution:
   [OK]   100000 responses
