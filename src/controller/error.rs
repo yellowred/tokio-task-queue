@@ -1,9 +1,9 @@
 use thiserror::Error;
 
-// Internal Executor errors
 #[derive(Debug, Error)]
 pub enum ControllerError {
     #[error("generic controller error")]
-    #[allow(dead_code)]
-    GenericError,
+    GenericError(String),
+    #[error("Internal service error: {0}")]
+    StorageServiceError(String),
 }
