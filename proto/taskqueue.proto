@@ -2,8 +2,9 @@ syntax = "proto3";
 package taskqueue.v1;
 
 service TaskQueue {
-	rpc publish (Task) returns (TaskQueueResult) {}
+	rpc archive (TaskID) returns (TaskQueueResult) {}
 	rpc list (FilterParams) returns (TaskList) {}
+	rpc publish (Task) returns (TaskQueueResult) {}
 }
 
 message Task {
@@ -60,5 +61,5 @@ message TaskList {
 }
 
 message TaskID {
-	uint64 id = 1;
+	bytes id = 1;
 }

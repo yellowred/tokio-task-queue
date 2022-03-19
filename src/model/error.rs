@@ -1,4 +1,4 @@
-use crate::api::proto::task::State;
+use crate::controller::api::proto::task::State;
 use thiserror::Error;
 
 // Internal Executor errors

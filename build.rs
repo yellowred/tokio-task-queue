@@ -27,7 +27,10 @@ fn build_protobuf() -> Result<(), Box<dyn std::error::Error>> {
         .build_server(true)
         .build_client(true)
         .type_attribute(".", "#[derive(serde::Deserialize, serde::Serialize)]")
-        .compile(&["proto/taskqueue.proto"], &["proto/"])?;
+        .compile(
+            &["proto/taskqueue.proto", "proto/grpc.health.proto"],
+            &["proto/"],
+        )?;
 
     println!(
         "cargo:rerun-if-changed={}",

@@ -4,7 +4,7 @@ use crate::model::CorrelationId;
 use serde_derive::Deserialize;
 use uuid::Uuid;
 
-use super::error::ModelError;
+use super::{error::ModelError, Task};
 
 #[derive(Debug, Deserialize, PartialEq, Eq, Clone)]
 #[serde(tag = "execution-type", content = "execution-parameters")]
@@ -45,6 +45,14 @@ impl Action {
                 task.name
             )))?,
         })
+    }
+}
+
+impl TryFrom<Task> for Action {
+    type Error = ModelError;
+
+    fn try_from(value: Task) -> Result<Self, Self::Error> {
+        Action::new(&value)
     }
 }
 
