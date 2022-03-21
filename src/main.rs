@@ -59,8 +59,6 @@ fn main() -> Result<(), std::io::Error> {
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
 
-    event!(Level::INFO, "Shutting down IRIS.");
-
     event!(Level::INFO, "Shutting down TaskQueue.");
 
     controller.stop().unwrap();
