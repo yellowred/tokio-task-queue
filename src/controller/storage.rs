@@ -125,26 +125,26 @@ async fn handle_request<D: TaskDataStore>(
     storage: Shared<D>,
     request: StorageServiceRequest,
 ) -> Result<StorageServiceResponse, ControllerError> {
-    let response = match &request {
-        StorageServiceRequest::Create(item) => storage
+    let response = match request {
+        StorageServiceRequest::Create(task) => storage
             .write()
             .await
-            .add(item.clone())
+            .add(task)
             .await
             .map(|_| StorageServiceResponse::Create),
         StorageServiceRequest::Fetch(uuid) => storage
             .read()
             .await
-            .get(uuid)
+            .get(&uuid)
             .await
             .map(|x| StorageServiceResponse::Fetch(x)),
         StorageServiceRequest::List(filter) => Ok(StorageServiceResponse::List(
-            storage.read().await.items(filter).await,
+            storage.read().await.items(&filter).await,
         )),
         StorageServiceRequest::UpdateState(task) => storage
             .write()
             .await
-            .update_state(task.clone())
+            .update_state(task)
             .await
             .map(|_| StorageServiceResponse::UpdateState),
         StorageServiceRequest::ListActive => Ok(StorageServiceResponse::List(

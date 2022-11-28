@@ -17,7 +17,7 @@ use super::super::error::ActionExecutionError;
 pub struct ProgramRunner {}
 
 impl ProgramRunner {
-    pub fn run(conf: &ProgramParameters) -> Result<Vec<NewTask>, ActionExecutionError> {
+    pub fn run(conf: ProgramParameters) -> Result<Vec<NewTask>, ActionExecutionError> {
         let program = &conf.program;
         let arguments = &conf.arguments;
 
@@ -82,7 +82,7 @@ mod tests {
         // WHEN
         let expected_result: Vec<NewTask> = vec![];
 
-        let result = ProgramRunner::run(&program_parameters).unwrap();
+        let result = ProgramRunner::run(program_parameters).unwrap();
 
         // THEN
         assert_eq!(result, expected_result, "Command did not run as expected");
