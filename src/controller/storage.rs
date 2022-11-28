@@ -186,7 +186,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::model::CorrelationId;
+    use crate::{controller::api::proto::task::Priority, model::CorrelationId};
     use tokio::sync::{mpsc::channel, RwLock};
 
     use uuid::Uuid;
@@ -196,6 +196,7 @@ mod tests {
     use super::*;
 
     use std::{collections::HashMap, convert::TryFrom, sync::Arc};
+
     #[tokio::test]
     async fn test_handle_storage_service_request() {
         // GIVEN
@@ -213,11 +214,15 @@ mod tests {
             "program".to_string(),
             CorrelationId::try_from(&"00000000-0000-0000-0000-000000000000".to_string()).unwrap(),
             HashMap::new(),
+            None,
+            Priority::Medium,
         );
         let mut task2 = Task::new(
             "program".to_string(),
             CorrelationId::try_from(&"00000000-0000-0000-0000-000000000000".to_string()).unwrap(),
             HashMap::new(),
+            None,
+            Priority::Medium,
         );
         uuids[0] = task1.uuid.clone();
         uuids[1] = task2.uuid.clone();

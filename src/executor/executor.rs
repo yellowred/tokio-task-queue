@@ -2,6 +2,7 @@ use super::error::{ActionExecutionError, ExecutorError};
 use super::runners::program_runner::ProgramRunner;
 use super::runners::service_runner::ServiceRunner;
 
+use crate::config::CHANNEL_SIZE;
 use crate::model::task::NewTask;
 use crate::model::Action;
 use crate::model::ExecutionParameter;
@@ -38,6 +39,7 @@ impl ActionExecutionOutcome {
 }
 
 // An Executor concrete implementation for processing Actions
+#[derive(Clone)]
 pub struct ActionExecutor {}
 
 impl ActionExecutor {
@@ -47,64 +49,58 @@ impl ActionExecutor {
 }
 
 impl ActionExecutor {
-    async fn execute(action: Action) -> ActionExecutionOutcome {
+    async fn dispatch_action(
+        self,
+        action: Action,
+        callback: Arc<Mutex<Sender<ActionExecutionOutcome>>>,
+    ) {
+        let action_id_string = action.uuid.hyphenated().to_string();
         let outcome = match &action.parameters {
             ExecutionParameter::Program(conf) => ProgramRunner::run(conf),
             ExecutionParameter::Service(conf) => ServiceRunner::run(conf).await,
         };
-        ActionExecutionOutcome::new(action, outcome)
-    }
+        let result = ActionExecutionOutcome::new(action, outcome);
+        let tx_out = callback.lock().await;
 
-    async fn dispatch_action(action: Action, callback: Arc<Mutex<Sender<ActionExecutionOutcome>>>) {
-        // execute
-        let output = Self::execute(action).await;
-        {
-            let tx_out = callback.lock().await;
-            // write output on the pipe
-            match tx_out.send(output).await {
-                Ok(()) => info!("Successfully returned the outcome of an action"),
-                Err(e) => error!(
-                    "An action finished but the output could not be sent through the out pipe: {}",
-                    e
-                ),
+        match tx_out.send(result).await {
+            Ok(()) => {
+                info!(uuid=%action_id_string, "Successfully returned the outcome of an action")
             }
-        }
+            Err(e) => error!(
+                "An action finished but the output could not be sent through the out pipe: {}",
+                e
+            ),
+        };
     }
-}
 
-impl Executor<Action, ActionExecutionOutcome> for ActionExecutor {
-    fn start(
-        &mut self,
+    pub fn start(
+        self,
         mut rx: Receiver<Action>,
     ) -> Result<(Receiver<ActionExecutionOutcome>, Runtime), ExecutorError> {
-        // init output pipe
-        let (tx_out, rx_out) = channel::<ActionExecutionOutcome>(32);
+        let (tx_out, rx_out) = channel::<ActionExecutionOutcome>(CHANNEL_SIZE);
         let thread_safe_tx_out = Arc::new(Mutex::new(tx_out));
-        // init long lived listener thread kill switch
 
-        // starts parrallel, long lived, listener thread
-        // Create the green threads tokio nested runtime
         let runtime = Builder::new_multi_thread()
             .thread_name("concurent-action-execution")
             .enable_all()
             .build()
             .expect("[concurent-action-execution] failed to create runtime");
 
-        // starts parrallel, long lived, listener thread
         runtime.handle().spawn(async move {
             info!("Starting executor loop...");
             while let Some(action) = rx.recv().await {
-                Self::dispatch_action(action, thread_safe_tx_out.clone()).await;
+                let action_executor_instance = self.clone();
+                let callback = thread_safe_tx_out.clone();
+                tokio::spawn(async move {
+                    action_executor_instance
+                        .dispatch_action(action, callback)
+                        .await
+                });
             }
+            info!("Finished executor loop.");
         });
 
-        // returns output receiver to the caller
         Ok((rx_out, runtime))
-    }
-
-    fn stop(&mut self) -> Result<(), ExecutorError> {
-        // not implemented
-        Ok(())
     }
 }
 
@@ -112,6 +108,7 @@ impl Executor<Action, ActionExecutionOutcome> for ActionExecutor {
 mod tests {
     use std::{collections::HashMap, convert::TryFrom};
 
+    use crate::controller::api::proto::task::Priority;
     use crate::model::CorrelationId;
 
     use crate::model::Task;
@@ -134,9 +131,12 @@ mod tests {
         let action = dummy_action();
         // init output pipe
         let (tx_out, mut rx_out) = channel::<ActionExecutionOutcome>(32);
+        let executor = ActionExecutor::new();
 
         // WHEN
-        ActionExecutor::dispatch_action(action.clone(), Arc::new(Mutex::new(tx_out))).await;
+        executor
+            .dispatch_action(action.clone(), Arc::new(Mutex::new(tx_out)))
+            .await;
 
         // THEN
         let result = rx_out.recv().await.unwrap();
@@ -157,12 +157,20 @@ mod tests {
         // init output pipe
         let (tx_out, mut rx_out) = channel::<ActionExecutionOutcome>(32);
 
+        let executor = ActionExecutor::new();
+
         // WHEN
-        ActionExecutor::dispatch_action(action_a.clone(), Arc::new(Mutex::new(tx_out.clone())))
+        executor
+            .clone()
+            .dispatch_action(action_a.clone(), Arc::new(Mutex::new(tx_out.clone())))
             .await;
-        ActionExecutor::dispatch_action(action_b.clone(), Arc::new(Mutex::new(tx_out.clone())))
+        executor
+            .clone()
+            .dispatch_action(action_b.clone(), Arc::new(Mutex::new(tx_out.clone())))
             .await;
-        ActionExecutor::dispatch_action(action_c.clone(), Arc::new(Mutex::new(tx_out.clone())))
+        executor
+            .clone()
+            .dispatch_action(action_c.clone(), Arc::new(Mutex::new(tx_out.clone())))
             .await;
 
         // THEN
@@ -189,19 +197,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_executor_stop() {
-        // GIVEN
-        let mut executor = ActionExecutor::new();
-        let (_, in_rx) = channel(32);
-
-        // WHEN
-        let _ = executor.start(in_rx).expect("failed to start");
-
-        // THEN
-        executor.stop().unwrap();
-    }
-
     fn dummy_action() -> Action {
         let mut params: HashMap<String, String> = HashMap::new();
         params.insert("program".to_string(), "ssh".to_string());
@@ -209,6 +204,8 @@ mod tests {
             "program".to_string(),
             CorrelationId::try_from(&"b7b054ca-0d37-418b-ab16-ebe8aa409285".to_string()).unwrap(),
             params,
+            None,
+            Priority::Medium,
         );
         Action::new(&task).unwrap()
     }

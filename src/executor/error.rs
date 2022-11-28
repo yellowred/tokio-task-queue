@@ -17,4 +17,8 @@ pub enum ActionExecutionError {
     IOError,
     #[error("http call resulted in error: {0}")]
     HttpError(String),
+    #[error("unable to proceed: {0}")]
+    UnableToProceed(String),
+    #[error("Unable to parse json body")]
+    JsonParseError(String),
 }

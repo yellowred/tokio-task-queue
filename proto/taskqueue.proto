@@ -3,8 +3,10 @@ package taskqueue.v1;
 
 service TaskQueue {
 	rpc archive (TaskID) returns (TaskQueueResult) {}
+	rpc clone_task (TaskID) returns (TaskQueueResult) {}
 	rpc list (FilterParams) returns (TaskList) {}
 	rpc publish (Task) returns (TaskQueueResult) {}
+	rpc retry (TaskID) returns (TaskQueueResult) {}
 }
 
 message Task {
@@ -49,6 +51,7 @@ message TaskQueueResult {
 	}
 	string resultID = 1;
 	Status status = 2;
+	string error = 3;
 }
 
 message FilterParams {
