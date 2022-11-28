@@ -4,7 +4,7 @@ use hyper::HeaderMap;
 use serde_derive::{Deserialize, Serialize};
 use std::convert::TryFrom;
 use thiserror::*;
-use uuid::{adapter::Hyphenated, Uuid};
+use uuid::{fmt::Hyphenated, Uuid};
 
 /// Correlation-ID for correlating logs together
 #[derive(Clone, Debug, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -175,6 +175,6 @@ impl CorrelationId {
     }
 
     pub fn as_hyphenated(&self) -> Hyphenated {
-        self.0.to_hyphenated()
+        self.0.hyphenated()
     }
 }

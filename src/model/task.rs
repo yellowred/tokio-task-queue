@@ -31,6 +31,8 @@ impl Task {
         name: String,
         correlation_id: CorrelationId,
         params: HashMap<String, String>,
+        stream: Option<String>,
+        priority: Priority,
     ) -> Task {
         let uuid = Uuid::new_v4();
 
@@ -38,8 +40,8 @@ impl Task {
             state: State::New,
             timestamp: chrono::Utc::now().naive_utc(),
             uuid: uuid,
-            stream: None,
-            priority: Priority::Medium,
+            stream,
+            priority,
             retries: 0,
             updated_at: None,
             parameters: params,
@@ -129,10 +131,14 @@ impl NewTask {
         correlation_id: CorrelationId,
         url: String,
         method: String,
+        body: Option<String>,
     ) -> Self {
         let mut task_params = HashMap::new();
         task_params.insert("url".to_string(), url);
         task_params.insert("method".into(), method);
+        if let Some(body_str) = body {
+            task_params.insert("body".into(), body_str);
+        }
 
         Self {
             name: "service".into(),
@@ -144,12 +150,20 @@ impl NewTask {
     }
 }
 
+impl From<NewTask> for Task {
+    fn from(x: NewTask) -> Self {
+        Task::new(x.name, x.correlation_id, x.parameters, x.stream, x.priority)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{collections::HashMap, convert::TryFrom, time::Duration};
 
     use super::{State, Task};
-    use crate::{config::RetryConfig, model::CorrelationId};
+    use crate::{
+        config::RetryConfig, controller::api::proto::task::Priority, model::CorrelationId,
+    };
     use tokio::time::sleep;
 
     #[tokio::test]
@@ -158,6 +172,8 @@ mod tests {
             "example".to_string(),
             CorrelationId::try_from(&"b7b054ca-0d37-418b-ab16-ebe8aa409285".to_string()).unwrap(),
             HashMap::new(),
+            None,
+            Priority::Medium,
         );
         assert_eq!(task.state, State::New, "new task has the correct state");
         assert!(
@@ -177,6 +193,8 @@ mod tests {
             "uuid1".into(),
             CorrelationId::try_from(&"b7b054ca-0d37-418b-ab16-ebe8aa409285".to_string()).unwrap(),
             HashMap::new(),
+            None,
+            Priority::Medium,
         );
         let config = RetryConfig::new(10, 20, 86400000, 300000);
         assert!(task1.can_retry(&config).is_none());
@@ -194,6 +212,8 @@ mod tests {
             "uuid2".into(),
             CorrelationId::try_from(&"b7b054ca-0d37-418b-ab16-ebe8aa409285".to_string()).unwrap(),
             HashMap::new(),
+            None,
+            Priority::Medium,
         );
         task2.state = State::Failed;
         assert_eq!(0, task2.retries);
@@ -214,6 +234,8 @@ mod tests {
             "uuid2".into(),
             CorrelationId::try_from(&"b7b054ca-0d37-418b-ab16-ebe8aa409285".to_string()).unwrap(),
             HashMap::new(),
+            None,
+            Priority::Medium,
         );
         task3.state = State::Inprogress;
         assert_eq!(0, task3.retries);

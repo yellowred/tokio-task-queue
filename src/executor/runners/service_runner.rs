@@ -101,12 +101,14 @@ mod tests {
             CorrelationId::try_from(&"00000000-0000-0000-0000-000000000000".to_string()).unwrap(),
             "url".to_string(),
             "method".to_string(),
+            None,
         );
         let task_2 = NewTask::new_service_call(
             None,
             CorrelationId::try_from(&"00000000-0000-0000-0000-000000000000".to_string()).unwrap(),
             "url".to_string(),
             "method".to_string(),
+            None,
         );
         let task_vec = vec![task_1, task_2];
         let body = json!(ServiceResponse {

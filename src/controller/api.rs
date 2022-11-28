@@ -67,13 +67,13 @@ impl Server {
 
         let timeout = std::time::Duration::new(self.config.timeout.unwrap_or(30), 0);
         let concurrency = self.config.concurrent.unwrap_or(30);
-        let iris_service = TaskQueueServer::new(self);
+        let task_queue_service = TaskQueueServer::new(self);
         let health_service = HealthServer::new(HealthCheckServer::new());
 
         match tonic::transport::Server::builder()
             .concurrency_limit_per_connection(concurrency)
             .timeout(timeout)
-            .add_service(iris_service)
+            .add_service(task_queue_service)
             .add_service(health_service)
             .serve(saddr)
             .await
@@ -124,6 +124,34 @@ impl Server {
             Err(err) => Err(anyhow!(err)),
         }
     }
+
+    async fn controller_retry(&self, task_id: String) -> anyhow::Result<String> {
+        let (req_sender, callback) = tokio::sync::oneshot::channel();
+
+        self.controller_sender
+            .send(ControllerRequest::RetryTask(task_id, req_sender))
+            .await?;
+
+        match callback.await {
+            Ok(Ok(v)) => Ok(v),
+            Ok(Err(err)) => Err(anyhow!(err)),
+            Err(err) => Err(anyhow!(err)),
+        }
+    }
+
+    async fn controller_clone_task(&self, task_id: String) -> anyhow::Result<String> {
+        let (req_sender, callback) = tokio::sync::oneshot::channel();
+
+        self.controller_sender
+            .send(ControllerRequest::CloneTask(task_id, req_sender))
+            .await?;
+
+        match callback.await {
+            Ok(Ok(v)) => Ok(v),
+            Ok(Err(err)) => Err(anyhow!(err)),
+            Err(err) => Err(anyhow!(err)),
+        }
+    }
 }
 
 impl fmt::Debug for Server {
@@ -140,15 +168,23 @@ impl TaskQueue for Server {
 
         // let mut ds = self.datastore.write().await;
         let task: Task = request.into_inner();
-        let model_task = crate::model::Task::new(task.name, correlation_id, task.parameters);
+        let task_priority = task.priority();
+        let model_task = crate::model::Task::new(
+            task.name,
+            correlation_id,
+            task.parameters,
+            Some(task.stream),
+            task_priority,
+        );
 
         self.controller_publish(model_task.clone())
             .await
             .map_err(|err_code| Status::unknown(format!("task push failed: {:?}", err_code)))
             .and_then(|_| {
                 let reply = TaskQueueResult {
-                    result_id: model_task.uuid.to_hyphenated().to_string(),
+                    result_id: model_task.uuid.hyphenated().to_string(),
                     status: proto::task_queue_result::Status::Ok as i32,
+                    error: "".to_string(),
                 };
                 Ok(Response::new(reply))
             })
@@ -159,25 +195,101 @@ impl TaskQueue for Server {
         let task_id = request.into_inner();
 
         let task_uuid = uuid::Uuid::from_slice(&task_id.id);
-        if let Err(_) = task_uuid {
+        if let Err(err) = task_uuid {
             let r = TaskQueueResult {
                 result_id: "".into(),
                 status: proto::task_queue_result::Status::Fail as i32,
+                error: err.to_string(),
             };
             return Ok(Response::new(r));
         }
         let reply = match self
-            .controller_archive(task_uuid.unwrap().to_hyphenated().to_string())
+            .controller_archive(task_uuid.unwrap().hyphenated().to_string())
             .await
         {
             Ok(id) => TaskQueueResult {
                 result_id: id,
                 status: proto::task_queue_result::Status::Ok as i32,
+                error: "".to_string(),
             },
-            Err(_) => TaskQueueResult {
+            Err(err) => TaskQueueResult {
                 result_id: "".into(),
                 status: proto::task_queue_result::Status::Fail as i32,
+                error: err.to_string(),
             },
+        };
+        Ok(Response::new(reply))
+    }
+
+    async fn retry(&self, request: Request<TaskId>) -> Result<Response<TaskQueueResult>, Status> {
+        let task_id = request.into_inner();
+
+        let task_uuid = uuid::Uuid::from_slice(&task_id.id);
+        if let Err(err) = task_uuid {
+            error!(error=%err, "Retry task error");
+
+            let r = TaskQueueResult {
+                result_id: "".into(),
+                status: proto::task_queue_result::Status::Fail as i32,
+                error: err.to_string(),
+            };
+            return Ok(Response::new(r));
+        }
+        let reply = match self
+            .controller_retry(task_uuid.unwrap().hyphenated().to_string())
+            .await
+        {
+            Ok(id) => TaskQueueResult {
+                result_id: id,
+                status: proto::task_queue_result::Status::Ok as i32,
+                error: "".to_string(),
+            },
+            Err(err) => {
+                error!(error=%err, "Retry task error");
+                TaskQueueResult {
+                    result_id: "".into(),
+                    status: proto::task_queue_result::Status::Fail as i32,
+                    error: err.to_string(),
+                }
+            }
+        };
+        Ok(Response::new(reply))
+    }
+
+    async fn clone_task(
+        &self,
+        request: Request<TaskId>,
+    ) -> Result<Response<TaskQueueResult>, Status> {
+        let task_id = request.into_inner();
+
+        let task_uuid = uuid::Uuid::from_slice(&task_id.id);
+        if let Err(err) = task_uuid {
+            error!(error=%err, "Retry task error");
+
+            let r = TaskQueueResult {
+                result_id: "".into(),
+                status: proto::task_queue_result::Status::Fail as i32,
+                error: err.to_string(),
+            };
+            return Ok(Response::new(r));
+        }
+        let reply = match self
+            .controller_clone_task(task_uuid.unwrap().hyphenated().to_string())
+            .await
+        {
+            Ok(id) => TaskQueueResult {
+                result_id: id,
+                status: proto::task_queue_result::Status::Ok as i32,
+                error: "".to_string(),
+            },
+            Err(err) => {
+                error!(error=%err, "Retry task error");
+                TaskQueueResult {
+                    result_id: "".into(),
+                    status: proto::task_queue_result::Status::Fail as i32,
+                    error: err.to_string(),
+                }
+            }
         };
         Ok(Response::new(reply))
     }

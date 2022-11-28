@@ -33,7 +33,7 @@ fn main() -> Result<(), std::io::Error> {
 
     event!(Level::INFO, "Starting TaskQueue: {}", env!("FULL_VERSION"));
 
-    let (tx_action, rx_action) = mpsc::channel::<Action>(32);
+    let (tx_action, rx_action) = mpsc::channel::<Action>(config::CHANNEL_SIZE);
     let mut executor = ActionExecutor::new();
     let (rx_execution_status, _executor_runtime) = executor.start(rx_action).unwrap();
 
@@ -46,7 +46,7 @@ fn main() -> Result<(), std::io::Error> {
         rx_execution_status,
         ServerConfig {
             port: 8001,
-            concurrent: Some(100),
+            concurrent: Some(1000),
             timeout: Some(30),
         },
     );

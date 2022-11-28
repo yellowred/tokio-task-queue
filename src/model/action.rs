@@ -125,7 +125,7 @@ pub enum ServiceParametersProtocol {
 mod tests {
     use std::{collections::HashMap, convert::TryFrom};
 
-    use crate::model::Task;
+    use crate::{controller::api::proto::task::Priority, model::Task};
 
     use super::*;
 
@@ -135,6 +135,8 @@ mod tests {
             "program".to_string(),
             CorrelationId::try_from(&"b7b054ca-0d37-418b-ab16-ebe8aa409285".to_string()).unwrap(),
             HashMap::new(),
+            None,
+            Priority::Medium,
         );
         let a = Action::new(&task1);
         assert!(a.is_err());
@@ -149,6 +151,8 @@ mod tests {
             "program".to_string(),
             CorrelationId::try_from(&"b7b054ca-0d37-418b-ab16-ebe8aa409285".to_string()).unwrap(),
             params2,
+            None,
+            Priority::Medium,
         );
         let a = Action::new(&task2).unwrap();
         assert_eq!(a.name, "program".to_string());
@@ -165,6 +169,8 @@ mod tests {
             "invalid".to_string(),
             CorrelationId::try_from(&"b7b054ca-0d37-418b-ab16-ebe8aa409285".to_string()).unwrap(),
             HashMap::new(),
+            None,
+            Priority::Medium,
         );
         let a = Action::new(&invalid_task);
         assert!(a.is_err());
@@ -179,6 +185,8 @@ mod tests {
             "service".to_string(),
             CorrelationId::try_from(&"b7b054ca-0d37-418b-ab16-ebe8aa409285".to_string()).unwrap(),
             params2,
+            None,
+            Priority::Medium,
         );
         let a = Action::new(&valid_task_def_protocol).unwrap();
         assert_eq!(a.name, "service".to_string());
@@ -198,6 +206,8 @@ mod tests {
             "service".to_string(),
             CorrelationId::try_from(&"b7b054ca-0d37-418b-ab16-ebe8aa409285".to_string()).unwrap(),
             params3,
+            None,
+            Priority::Medium,
         );
         let a = Action::new(&valid_task_specific_protocol).unwrap();
         let p = match a.parameters {

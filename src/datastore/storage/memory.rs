@@ -72,7 +72,7 @@ mod tests {
     use std::convert::TryFrom;
 
     use super::*;
-    use crate::model::CorrelationId;
+    use crate::{controller::api::proto::task::Priority, model::CorrelationId};
 
     #[tokio::test]
     async fn test_store() {
@@ -82,6 +82,8 @@ mod tests {
             "task".to_string(),
             CorrelationId::try_from(&"00000000-0000-0000-0000-000000000000".to_string()).unwrap(),
             HashMap::new(),
+            None,
+            Priority::Medium,
         );
 
         // WHEN
@@ -99,6 +101,8 @@ mod tests {
             "task_a".to_string(),
             CorrelationId::try_from(&"00000000-0000-0000-0000-000000000000".to_string()).unwrap(),
             HashMap::new(),
+            None,
+            Priority::Medium,
         );
         let instance_uuid = uuid::Uuid::new_v4();
 

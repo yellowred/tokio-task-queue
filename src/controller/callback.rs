@@ -81,8 +81,7 @@ async fn callback_receiver(
             task.update_state_retries(TaskState::Success, task.retries.clone())?;
 
             while let Some(new_task) = tasks.pop() {
-                let new_task_model =
-                    Task::new(new_task.name, new_task.correlation_id, new_task.parameters);
+                let new_task_model = Task::from(new_task);
 
                 let _ = super::dispatcher::dispatch_task(
                     new_task_model,
@@ -139,7 +138,7 @@ pub async fn task_schedule_retry(
                 "Retry has been scheduled"
             );
             time::sleep(schedule_after).await;
-            let task_uuid_hyphenated = task.uuid.to_hyphenated().to_string();
+            let task_uuid_hyphenated = task.uuid.hyphenated().to_string();
 
             if let Err(err) = dispatch_retry(task, tx_storage, tx_action).await {
                 error!(reason=%err, uuid=task_uuid_hyphenated.as_str(), "Error retrying task.")
@@ -175,7 +174,7 @@ async fn dispatch_retry(
 
 #[cfg(test)]
 mod tests {
-    use crate::model::CorrelationId;
+    use crate::{controller::api::proto::task::Priority, model::CorrelationId};
     use std::{collections::HashMap, convert::TryFrom, sync::Arc, time::Duration};
     use tokio::sync::{mpsc::channel, RwLock};
 
@@ -202,6 +201,8 @@ mod tests {
             "program".to_string(),
             CorrelationId::try_from(&"00000000-0000-0000-0000-000000000000".to_string()).unwrap(),
             params.clone(),
+            None,
+            Priority::Medium,
         );
 
         let _: () = super::super::storage::send(
@@ -248,6 +249,8 @@ mod tests {
             "program".to_string(),
             CorrelationId::try_from(&"00000000-0000-0000-0000-000000000000".to_string()).unwrap(),
             params.clone(),
+            None,
+            Priority::Medium,
         );
 
         // WHEN new

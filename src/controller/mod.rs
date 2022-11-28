@@ -18,6 +18,7 @@ pub use api::ServerConfig;
 pub use error::ControllerError;
 use tracing::instrument;
 
+use crate::config::CHANNEL_SIZE;
 use crate::datastore::TaskDataStore;
 use crate::executor::ActionExecutionOutcome;
 use crate::model::{Action, Task};
@@ -30,6 +31,8 @@ type Shared<D> = Arc<RwLock<D>>;
 pub enum ControllerRequest {
     SubmitTask(Task, oneshot::Sender<Result<TaskId, ControllerError>>),
     CancelTask(TaskId, oneshot::Sender<Result<TaskId, ControllerError>>),
+    RetryTask(TaskId, oneshot::Sender<Result<TaskId, ControllerError>>),
+    CloneTask(TaskId, oneshot::Sender<Result<TaskId, ControllerError>>),
 }
 
 pub type TaskId = String;
@@ -57,9 +60,10 @@ where
         rx_execution_status: Receiver<ActionExecutionOutcome>,
         cfg: ServerConfig,
     ) -> Self {
-        let (tx_controller_request, rx_controller_request) = mpsc::channel::<ControllerRequest>(32);
+        let (tx_controller_request, rx_controller_request) =
+            mpsc::channel::<ControllerRequest>(CHANNEL_SIZE);
 
-        let (tx_storage, rx_storage) = channel::<RequestResponse>(32);
+        let (tx_storage, rx_storage) = channel::<RequestResponse>(CHANNEL_SIZE);
         let storage_service = storage::StorageService::new(datastore.clone(), rx_storage);
         let dispatcher_service = dispatcher::DispatcherService::new(
             rx_controller_request,
