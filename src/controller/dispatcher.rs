@@ -1,7 +1,6 @@
 use tokio::runtime::{Builder, Runtime};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tracing::{error, info};
-use uuid::Uuid;
 
 use crate::controller::storage::StorageServiceRequest;
 use crate::controller::{storage, ControllerError};

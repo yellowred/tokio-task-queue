@@ -177,17 +177,15 @@ impl TaskQueue for Server {
             task_priority,
         );
 
-        self.controller_publish(model_task.clone())
+        let reply = TaskQueueResult {
+            result_id: model_task.uuid.hyphenated().to_string(),
+            status: proto::task_queue_result::Status::Ok as i32,
+            error: "".to_string(),
+        };
+        self.controller_publish(model_task)
             .await
             .map_err(|err_code| Status::unknown(format!("task push failed: {:?}", err_code)))
-            .and_then(|_| {
-                let reply = TaskQueueResult {
-                    result_id: model_task.uuid.hyphenated().to_string(),
-                    status: proto::task_queue_result::Status::Ok as i32,
-                    error: "".to_string(),
-                };
-                Ok(Response::new(reply))
-            })
+            .and_then(|_| Ok(Response::new(reply)))
     }
 
     #[instrument]

@@ -15,10 +15,10 @@ use super::super::error::ActionExecutionError;
 pub struct ServiceRunner {}
 
 impl ServiceRunner {
-    pub async fn run(conf: &ServiceParameters) -> Result<Vec<NewTask>, ActionExecutionError> {
+    pub async fn run(conf: ServiceParameters) -> Result<Vec<NewTask>, ActionExecutionError> {
         match conf.protocol {
             ServiceParametersProtocol::Http => {
-                Self::execute_http_task(&conf.correlation_id, &conf.parameters)
+                Self::execute_http_task(&conf.correlation_id, conf.parameters)
                     .await
                     .map_err(|err| ActionExecutionError::HttpError(err.to_string()))
             }
@@ -28,14 +28,14 @@ impl ServiceRunner {
 
     async fn execute_http_task(
         cid: &CorrelationId,
-        parameters: &HashMap<String, String>,
+        mut parameters: HashMap<String, String>,
     ) -> anyhow::Result<Vec<NewTask>> {
         let mut rheaders = HeaderMap::new();
         cid.insert_into_header_map(&mut rheaders)?;
 
-        if let Some(headers_string) = parameters.get("headers") {
+        if let Some(headers_string) = parameters.remove("headers") {
             let provided_headers: HashMap<String, String> =
-                serde_json::from_value(serde_json::Value::String(headers_string.clone()))?;
+                serde_json::from_value(serde_json::Value::String(headers_string))?;
             for h in provided_headers.into_iter() {
                 let val = HeaderValue::from_str(&h.1)?;
                 rheaders.insert(HeaderName::from_str(h.0.as_str())?, val);
@@ -134,7 +134,7 @@ mod tests {
         params.insert("url".to_string(), server.url(url.clone()));
         params.insert("method".to_string(), "GET".to_string());
         let output =
-            ServiceRunner::execute_http_task(&CorrelationId::from(uuid::Uuid::new_v4()), &params)
+            ServiceRunner::execute_http_task(&CorrelationId::from(uuid::Uuid::new_v4()), params)
                 .await
                 .unwrap();
 
@@ -146,7 +146,7 @@ mod tests {
         params2.insert("url".to_string(), server.url(url.clone()));
         params2.insert("method".to_string(), "GET".to_string());
         let output2 =
-            ServiceRunner::execute_http_task(&CorrelationId::from(uuid::Uuid::new_v4()), &params2)
+            ServiceRunner::execute_http_task(&CorrelationId::from(uuid::Uuid::new_v4()), params2)
                 .await
                 .unwrap();
 
@@ -174,7 +174,7 @@ mod tests {
         params.insert("url".to_string(), server.url("/e404".to_string()));
         params.insert("method".to_string(), "GET".to_string());
         let output =
-            ServiceRunner::execute_http_task(&CorrelationId::from(uuid::Uuid::new_v4()), &params)
+            ServiceRunner::execute_http_task(&CorrelationId::from(uuid::Uuid::new_v4()), params)
                 .await
                 .unwrap_err();
 

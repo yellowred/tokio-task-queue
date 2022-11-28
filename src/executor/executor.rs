@@ -55,7 +55,7 @@ impl ActionExecutor {
         callback: Arc<Mutex<Sender<ActionExecutionOutcome>>>,
     ) {
         let action_id_string = action.uuid.hyphenated().to_string();
-        let outcome = match &action.parameters {
+        let outcome = match action.parameters.clone() {
             ExecutionParameter::Program(conf) => ProgramRunner::run(conf),
             ExecutionParameter::Service(conf) => ServiceRunner::run(conf).await,
         };
