@@ -5,6 +5,7 @@ use tracing::error;
 use uuid::Uuid;
 
 use crate::controller::ControllerError;
+use crate::model::task::NewState;
 use crate::{
     datastore::{Filter, TaskDataStore},
     model::{Task, TaskState},
@@ -17,7 +18,7 @@ pub enum StorageServiceRequest {
     Fetch(Uuid),
     List(Filter),
     ListActive,
-    UpdateState(Task),
+    UpdateState(NewState),
 }
 
 pub enum StorageServiceResponse {
@@ -141,10 +142,10 @@ async fn handle_request<D: TaskDataStore>(
         StorageServiceRequest::List(filter) => Ok(StorageServiceResponse::List(
             storage.read().await.items(&filter).await,
         )),
-        StorageServiceRequest::UpdateState(task) => storage
+        StorageServiceRequest::UpdateState(new_state) => storage
             .write()
             .await
-            .update_state(task)
+            .update_state(new_state)
             .await
             .map(|_| StorageServiceResponse::UpdateState),
         StorageServiceRequest::ListActive => Ok(StorageServiceResponse::List(
@@ -262,7 +263,7 @@ mod tests {
         let (req_sender, callback) = tokio::sync::oneshot::channel();
         let _ = tx_action
             .send((
-                StorageServiceRequest::UpdateState(task2.clone()),
+                StorageServiceRequest::UpdateState(task2.as_new_state()),
                 req_sender,
             ))
             .await;

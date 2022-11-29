@@ -3,7 +3,7 @@ mod memory;
 
 use uuid::Uuid;
 
-use crate::model::Task;
+use crate::model::{task::NewState, Task};
 pub use error::StorageError;
 pub use memory::MemoryTaskStorage;
 
@@ -12,7 +12,7 @@ pub use memory::MemoryTaskStorage;
 pub trait TaskStorage: Sync + Send + 'static {
     async fn fetch(&self, uuid: &Uuid) -> Result<Option<Task>, StorageError>;
     async fn store(&self, item: Task) -> Result<Uuid, StorageError>;
-    async fn update(&self, item: Task) -> Result<Uuid, StorageError>;
+    async fn update(&self, new_state: NewState) -> Result<Uuid, StorageError>;
     async fn items(&self) -> Vec<Task>;
     async fn items_filtered_state(&self, states: Vec<i32>) -> Vec<Task>;
 }
