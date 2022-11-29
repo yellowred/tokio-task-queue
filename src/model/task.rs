@@ -74,6 +74,16 @@ impl Task {
         })
     }
 
+    pub fn as_new_state(&self) -> NewState {
+        NewState {
+            uuid: self.uuid.to_owned(),
+            state: self.state.to_owned(),
+            retries: self.retries.to_owned(),
+            priority: self.priority.to_owned(),
+            updated_at: self.updated_at.to_owned().unwrap_or(self.timestamp),
+        }
+    }
+
     pub fn can_retry(&self, config: &RetryConfig) -> Option<i64> {
         if self.state != State::Inprogress && self.state != State::Failed {
             return None;
@@ -154,6 +164,14 @@ impl From<NewTask> for Task {
     fn from(x: NewTask) -> Self {
         Task::new(x.name, x.correlation_id, x.parameters, x.stream, x.priority)
     }
+}
+
+pub struct NewState {
+    pub uuid: uuid::Uuid,
+    pub state: State,
+    pub retries: i32,
+    pub priority: Priority,
+    pub updated_at: chrono::NaiveDateTime,
 }
 
 #[cfg(test)]

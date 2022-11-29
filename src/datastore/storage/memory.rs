@@ -3,6 +3,7 @@ use uuid::Uuid;
 
 use super::super::TaskStorage;
 use super::error::StorageError;
+use crate::model::task::NewState;
 use crate::model::Task;
 
 pub struct MemoryTaskStorage {
@@ -29,7 +30,7 @@ impl TaskStorage for MemoryTaskStorage {
         }
     }
 
-    async fn store(&self, mut item: Task) -> Result<Uuid, StorageError> {
+    async fn store(&self, item: Task) -> Result<Uuid, StorageError> {
         let mut tasks = self.tasks.lock().unwrap();
         match tasks.get(&item.uuid) {
             Some(task) => return Err(StorageError::Conflict(task.uuid)),
@@ -40,15 +41,15 @@ impl TaskStorage for MemoryTaskStorage {
         }
     }
 
-    async fn update(&self, item: Task) -> Result<Uuid, StorageError> {
+    async fn update(&self, new_state: NewState) -> Result<Uuid, StorageError> {
         let mut tasks = self.tasks.lock().unwrap();
-        match tasks.get_mut(&item.uuid) {
+        match tasks.get_mut(&new_state.uuid) {
             Some(task) => {
-                task.state = item.state;
-                task.retries = item.retries;
-                return Ok(item.uuid);
+                task.state = new_state.state;
+                task.retries = new_state.retries;
+                return Ok(new_state.uuid);
             }
-            None => return Err(StorageError::NotFound(item.uuid)),
+            None => return Err(StorageError::NotFound(new_state.uuid)),
         }
     }
 

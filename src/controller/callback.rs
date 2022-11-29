@@ -93,7 +93,7 @@ async fn callback_receiver(
             }
             super::storage::send(
                 tx_storage.clone(),
-                StorageServiceRequest::UpdateState(task.clone()),
+                StorageServiceRequest::UpdateState(task.as_new_state()),
             )
             .await?;
         }
@@ -108,7 +108,7 @@ async fn callback_receiver(
             task.update_state_retries(TaskState::Failed, task.retries.clone())?;
             super::storage::send(
                 tx_storage.clone(),
-                StorageServiceRequest::UpdateState(task.clone()),
+                StorageServiceRequest::UpdateState(task.as_new_state()),
             )
             .await?;
             task_schedule_retry(task, tx_storage.clone(), tx_action.clone()).await?
@@ -148,8 +148,11 @@ pub async fn task_schedule_retry(
     }
 
     task.update_state_retries(TaskState::Died, task.retries.clone())?;
-    let _ =
-        super::storage::send(tx_storage, StorageServiceRequest::UpdateState(task.clone())).await?;
+    let _ = super::storage::send(
+        tx_storage,
+        StorageServiceRequest::UpdateState(task.as_new_state()),
+    )
+    .await?;
     Ok(())
 }
 
@@ -162,7 +165,7 @@ async fn dispatch_retry(
 
     super::storage::send(
         tx_storage.clone(),
-        StorageServiceRequest::UpdateState(task.clone()),
+        StorageServiceRequest::UpdateState(task.as_new_state()),
     )
     .await?;
 
@@ -282,7 +285,7 @@ mod tests {
         task.retries = 10;
         let _: () = super::super::storage::send(
             tx_storage.clone(),
-            StorageServiceRequest::UpdateState(task.clone()),
+            StorageServiceRequest::UpdateState(task.as_new_state()),
         )
         .await
         .unwrap();

@@ -127,7 +127,7 @@ pub async fn dispatch_task(
 
     storage::send(
         tx_storage.clone(),
-        StorageServiceRequest::UpdateState(task.clone()),
+        StorageServiceRequest::UpdateState(task.as_new_state()),
     )
     .await?;
 
@@ -162,7 +162,7 @@ async fn cancel_task(
 
     storage::send(
         tx_storage.clone(),
-        StorageServiceRequest::UpdateState(task.clone()),
+        StorageServiceRequest::UpdateState(task.as_new_state()),
     )
     .await?;
 

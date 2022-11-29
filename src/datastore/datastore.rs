@@ -4,12 +4,12 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use super::{error::DataStoreError, storage::TaskStorage};
-use crate::model::{Task, TaskState};
+use crate::model::{task::NewState, Task, TaskState};
 
 #[tonic::async_trait]
 pub trait TaskDataStore {
     async fn add(&mut self, item: Task) -> Result<(), DataStoreError>;
-    async fn update_state(&mut self, task: Task) -> Result<(), DataStoreError>;
+    async fn update_state(&mut self, new_state: NewState) -> Result<(), DataStoreError>;
     async fn items(&self, filter: &Filter) -> Vec<Task>;
     async fn get(&self, uuid: &Uuid) -> Result<Option<Task>, DataStoreError>;
 
@@ -99,9 +99,9 @@ where
         Ok(())
     }
 
-    async fn update_state(&mut self, task: Task) -> Result<(), DataStoreError> {
+    async fn update_state(&mut self, new_state: NewState) -> Result<(), DataStoreError> {
         self.storage
-            .update(task)
+            .update(new_state)
             .await
             .map_err(|err| DataStoreError::Storage(err.to_string()))?;
         Ok(())
